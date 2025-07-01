@@ -12,8 +12,12 @@ export default function ProductsPage() {
   const { cart, addToCart, updateCartItem } = useCart();
 
   useEffect(() => {
-    fetchProducts();
+    const token = localStorage.getItem("token");
+    if (token) {
+      fetchProducts();
+    }
   }, []);
+  
 
   const fetchProducts = async () => {
     try {

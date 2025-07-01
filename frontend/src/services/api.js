@@ -3,32 +3,49 @@
 import axios from "axios";
 import toast from "react-hot-toast";
 
+// ✅ Create Axios instance
 const API = axios.create({
-  baseURL: "http://localhost:8001", // ✅ Your FastAPI base URL
+  baseURL: "http://localhost:8001", // ⬅️ Update if your backend runs elsewhere
 });
 
-// 🔐 Add Authorization header for every request
-API.interceptors.request.use((config) => {
-  const token = localStorage.getItem("token");
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
+// ✅ Attach Bearer token from localStorage (client-only)
+API.interceptors.request.use(
+  (config) => {
+    if (typeof window !== "undefined") {
+      const token = localStorage.getItem("token");
+      if (token) {
+        config.headers.Authorization = `Bearer ${token}`;
+      }
+    }
+    return config;
+  },
+  (error) => {
+    return Promise.reject(error);
   }
-  return config;
-});
+);
 
-// ❌ Handle token expiry or invalid token
+// ✅ Global 401 handler (token expired, invalid, or missing)
 API.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401) {
-      toast.error("Session expired. Please log in again.");
+    if (typeof window !== "undefined" && error.response?.status === 401) {
+      // ✅ Clear session
       localStorage.removeItem("token");
       localStorage.removeItem("user");
 
-      // 🔁 Redirect to login page
-      if (typeof window !== "undefined") {
-        window.location.href = "/login";
+      // ✅ Show toast once
+      if (!window.__hasShownTokenExpireToast) {
+        toast.error("Session expired. Please log in again.");
+        window.__hasShownTokenExpireToast = true;
+
+        // Reset the flag after 3 seconds so toast can reappear later if needed
+        setTimeout(() => {
+          window.__hasShownTokenExpireToast = false;
+        }, 3000);
       }
+
+      // ✅ Redirect to login page
+      window.location.href = "/login";
     }
 
     return Promise.reject(error);

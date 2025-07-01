@@ -8,15 +8,21 @@ import { useCart } from "@/context/CartContext";
 export default function Navbar() {
   const { cartItems = [] } = useCart() || {}; // fallback to empty if undefined
   const totalItems = cartItems.reduce((sum, item) => sum + item.quantity, 0);
+  // or don't call fetchCart()
 
   const [user, setUser] = useState(null);
   const pathname = usePathname();
   const router = useRouter();
-
+  
+  
   useEffect(() => {
+    const token = localStorage.getItem("token");
+    if (!token) return; // ✅ skip if no token
+
     const stored = localStorage.getItem("user");
     if (stored) setUser(JSON.parse(stored));
   }, [pathname]);
+  
 
   const handleLogout = () => {
     localStorage.removeItem("token");

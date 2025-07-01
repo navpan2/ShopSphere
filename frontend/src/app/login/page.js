@@ -1,16 +1,18 @@
 "use client";
 
-import { useState } from "react";
+import { useState ,useEffect} from "react";
 import { useRouter } from "next/navigation";
 import API from "@/services/api";
 import NProgress from "nprogress";
+
+
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [err, setErr] = useState("");
   const router = useRouter();
-
+  
   const handleSubmit = async (e) => {
     e.preventDefault();
     NProgress.start(); // Loader start
@@ -26,14 +28,20 @@ export default function LoginPage() {
       NProgress.done(); // Loader stop
     }
   };
+  useEffect(() => {
+    const token = localStorage.getItem("token");
+    if (token) {
+      router.push("/products"); // already logged in
+    }
+  }, []);
   
-
+  
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 p-6">
       <form
         onSubmit={handleSubmit}
         className="bg-white p-10 rounded-xl shadow-2xl w-full max-w-md"
-      >
+        >
         <h2 className="text-3xl font-bold mb-6 text-center text-gray-800">
           🔐 Sign In to ShopSphere
         </h2>
