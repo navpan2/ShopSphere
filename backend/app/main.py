@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from app.routers import auth, product, order, payment
 from dotenv import load_dotenv
+from app.routers import stripe_checkout  # ⬅️ add this
 
 load_dotenv()
 
@@ -19,6 +20,9 @@ app.add_middleware(
 )
 
 # Routers
+
+app.include_router(stripe_checkout.router)  # ⬅️ include this
+
 app.include_router(auth.router)
 app.include_router(product.router)
 app.include_router(order.router)

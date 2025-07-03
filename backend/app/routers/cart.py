@@ -13,6 +13,13 @@ def get_cart(db: Session = Depends(get_db), user_id: int = Depends(get_current_u
     return db.query(models.CartItem).filter(models.CartItem.user_id == user_id).all()
 
 
+@router.delete("/clear")
+def clear_cart(user_id: int = Depends(get_current_user), db: Session = Depends(get_db)):
+    db.query(models.CartItem).filter(models.CartItem.user_id == user_id).delete()
+    db.commit()
+    return {"message": "Cart cleared"}
+
+
 @router.post("/add", response_model=schemas.CartItemOut)
 def add_to_cart(
     item: schemas.CartItemCreate,

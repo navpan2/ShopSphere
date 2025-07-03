@@ -4,10 +4,12 @@ import { useEffect, useState } from "react";
 import { useCart } from "@/context/CartContext";
 import Image from "next/image";
 import toast from "react-hot-toast";
+import { useRouter } from "next/navigation";
 
 export default function CartPage() {
   const { cart, updateCartItem, removeFromCart } = useCart();
   const [removingId, setRemovingId] = useState(null);
+  const router = useRouter();
 
   const handleUpdate = (productId, newQty, stock) => {
     if (newQty > stock) {
@@ -94,8 +96,18 @@ export default function CartPage() {
             </div>
           ))}
 
+          {/* Total & Checkout */}
           <div className="text-right text-xl font-semibold text-gray-700 mt-6">
             Total: ₹ {getTotal()}
+          </div>
+
+          <div className="flex justify-end">
+            <button
+              onClick={() => router.push("/checkout")}
+              className="mt-4 bg-indigo-600 text-white px-6 py-3 rounded hover:bg-indigo-700 transition"
+            >
+              Proceed to Checkout
+            </button>
           </div>
         </div>
       )}
