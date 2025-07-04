@@ -5,6 +5,7 @@ import API from "@/services/api";
 import Image from "next/image";
 import { useCart } from "@/context/CartContext";
 import toast from "react-hot-toast";
+import Link from "next/link";
 
 export default function ProductsPage() {
   const [products, setProducts] = useState([]);
@@ -13,11 +14,8 @@ export default function ProductsPage() {
 
   useEffect(() => {
     const token = localStorage.getItem("token");
-    if (token) {
-      fetchProducts();
-    }
+    if (token) fetchProducts();
   }, []);
-  
 
   const fetchProducts = async () => {
     try {
@@ -49,11 +47,23 @@ export default function ProductsPage() {
     updateCartItem(productId, currentQty - 1);
   };
 
+  const cartCount = cart.reduce((sum, item) => sum + item.quantity, 0);
+
   return (
     <div className="min-h-screen bg-gray-50 py-10 px-6">
-      <h1 className="text-4xl font-bold text-center text-indigo-600 mb-10">
-        🛒 Browse Our Products
-      </h1>
+      <div className="max-w-7xl mx-auto flex justify-between items-center mb-6">
+        <h1 className="text-4xl font-bold text-indigo-600">
+          🛒 Browse Our Products
+        </h1>
+        {cartCount > 0 && (
+          <Link
+            href="/cart"
+            className="bg-green-600 text-white px-5 py-2 rounded hover:bg-green-700 transition"
+          >
+            Go to Cart ({cartCount})
+          </Link>
+        )}
+      </div>
 
       {loading ? (
         <div className="flex justify-center mt-20">

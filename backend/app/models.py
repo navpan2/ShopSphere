@@ -1,7 +1,8 @@
 from sqlalchemy import Column, Integer, String, Float, Boolean, ForeignKey
 from sqlalchemy.orm import relationship
 from app.database import Base
-
+from sqlalchemy import DateTime
+from sqlalchemy.sql import func
 
 class User(Base):
     __tablename__ = "users"
@@ -21,13 +22,13 @@ class Product(Base):
     image_url = Column(String)  # ✅ NEW field
     stock = Column(Integer, default=0)  
 
-class Order(Base):
-    __tablename__ = "orders"
-    id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"))
-    total = Column(Float)
-    status = Column(String, default="pending")
-    user = relationship("User")
+# class Order(Base):
+#     __tablename__ = "orders"
+#     id = Column(Integer, primary_key=True, index=True)
+#     user_id = Column(Integer, ForeignKey("users.id"))
+#     total = Column(Float)
+#     status = Column(String, default="pending")
+#     user = relationship("User")
 
 
 class CartItem(Base):
@@ -40,3 +41,29 @@ class CartItem(Base):
 
     user = relationship("User", back_populates="cart_items")
     product = relationship("Product")
+
+
+class Order(Base):
+    __tablename__ = "orders"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    total = Column(Float)
+    status = Column(String, default="pending")
+    created_at = Column(DateTime, default=func.now())  # 🕒 optional
+
+    user = relationship("User")
+    items = relationship("OrderItem", back_populates="order")  # ✅ link to order_items
+
+
+class OrderItem(Base):
+    __tablename__ = "order_items"
+
+    id = Column(Integer, primary_key=True, index=True)
+    order_id = Column(Integer, ForeignKey("orders.id"))
+    product_id = Column(Integer)
+    product_name = Column(String)
+    quantity = Column(Integer)
+    price = Column(Float)
+
+    order = relationship("Order", back_populates="items")  # ✅ reverse relation

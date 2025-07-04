@@ -33,12 +33,15 @@ export default function RootLayout({ children }) {
   return (
     <html lang="en">
       <body>
-        <Navbar />
         <CartProvider>
-        <Toaster position="top-right" />
+          {" "}
+          {/* ✅ Wrap EVERYTHING including Navbar */}
+          <Navbar />
+          <Toaster position="top-right" />
           {children}
         </CartProvider>
       </body>
     </html>
   );
 }
+

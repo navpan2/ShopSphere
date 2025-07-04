@@ -14,10 +14,10 @@ export default function CheckoutPage() {
   const router = useRouter();
 
   useEffect(() => {
-    fetchCart(); // ensure up-to-date cart
+    fetchCart(); // Ensure cart is latest
   }, []);
 
-  if (!hasMounted) return null; // 🛑 Prevent hydration mismatch
+  if (!hasMounted) return null; // Prevent hydration mismatch
 
   const total = cart.reduce(
     (sum, item) => sum + item.product.price * item.quantity,
@@ -27,24 +27,28 @@ export default function CheckoutPage() {
   const handleCheckout = async () => {
     setLoading(true);
     try {
-        const user = JSON.parse(localStorage.getItem("user"));
+      const user = JSON.parse(localStorage.getItem("user"));
 
-        const res = await API.post("/create-checkout-session", {
-          email: user?.email,
-          items: cart.map((item) => ({
-            id: item.product.id,
-            name: item.product.name,
-            price: item.product.price,
-            quantity: item.quantity,
-          })),
-        });
-        
+      // ✅ Store cart in localStorage before Stripe redirect
+      localStorage.setItem("cart_backup", JSON.stringify(cart));
+
+      const res = await API.post("/create-checkout-session", {
+        email: user?.email,
+        items: cart.map((item) => ({
+          id: item.product.id,
+          name: item.product.name,
+          price: item.product.price,
+          quantity: item.quantity,
+        })),
+      });
+
       if (res.data.url) {
         window.location.href = res.data.url;
       } else {
         toast.error("Failed to initiate checkout");
       }
     } catch (err) {
+      console.error(err);
       toast.error("Error during checkout");
     } finally {
       setLoading(false);

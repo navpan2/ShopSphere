@@ -34,6 +34,16 @@ class ProductCreate(BaseModel):
     image_url: Optional[str] = None
     stock: int = 0  # ✅ NEW
 
+class OrderItemCreate(BaseModel):
+    product_id: int
+    product_name: str
+    quantity: int
+    price: float
+
+
+class OrderCreate(BaseModel):
+    items: List[OrderItemCreate]
+    total: float
 
 class ProductOut(BaseModel):
     id: int
@@ -47,17 +57,28 @@ class ProductOut(BaseModel):
         orm_mode = True
 
 
-class OrderCreate(BaseModel):
-    total: float
-
-
-class OrderOut(OrderCreate):
+class OrderItemOut(BaseModel):
     id: int
-    user_id: int
-    status: str
+    product_id: int
+    product_name: str
+    quantity: int
+    price: float
 
     class Config:
         orm_mode = True
+
+
+class OrderOut(BaseModel):
+    id: int
+    user_id: int
+    status: str
+    total: float
+    items: List[OrderItemOut]  # ✅ include items
+    # optional: created_at: datetime
+
+    class Config:
+        orm_mode = True
+
 
 class CartItemBase(BaseModel):
     product_id: int

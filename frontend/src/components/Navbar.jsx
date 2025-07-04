@@ -6,8 +6,8 @@ import { usePathname, useRouter } from "next/navigation";
 import { useCart } from "@/context/CartContext";
 
 export default function Navbar() {
-  const { cartItems = [] } = useCart() || {}; // fallback to empty if undefined
-  const totalItems = cartItems.reduce((sum, item) => sum + item.quantity, 0);
+  const { cart = [] } = useCart() || {};
+  const totalItems = cart.reduce((sum, item) => sum + item.quantity, 0);
   // or don't call fetchCart()
 
   const [user, setUser] = useState(null);
@@ -53,6 +53,7 @@ export default function Navbar() {
             <>
               {/* Cart with badge */}
               <div className="relative">
+                
                 <Link
                   href="/cart"
                   className="text-gray-700 hover:text-indigo-600 font-semibold"
@@ -69,7 +70,10 @@ export default function Navbar() {
               <NavLink href="/products" label="Products" />
               <NavLink href="/orders" label="Orders" />
               {user.is_admin && (
-                <NavLink href="/admin/add-product" label="Add Product" />
+                <NavLink
+                  href="/admin/manage-products"
+                  label="Manage Products"
+                />
               )}
 
               <span className="text-gray-400 hidden sm:inline">|</span>

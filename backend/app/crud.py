@@ -45,10 +45,34 @@ def get_all_products(db: Session):
 
 # ---------- ORDERS ----------
 def create_order(db: Session, user_id: int, order: schemas.OrderCreate):
-    db_order = models.Order(user_id=user_id, total=order.total)
+    # Step 1: Create the order
+    db_order = models.Order(user_id=user_id, total=order.total, status="paid")
     db.add(db_order)
     db.commit()
     db.refresh(db_order)
+
+    # Step 2: Save items & reduce stock
+    for item in order.items:
+        db_item = models.OrderItem(
+            order_id=db_order.id,
+            product_id=item.product_id,
+            product_name=item.product_name,
+            quantity=item.quantity,
+            price=item.price,
+        )
+        db.add(db_item)
+
+        # Reduce stock
+        product = (
+            db.query(models.Product)
+            .filter(models.Product.id == item.product_id)
+            .first()
+        )
+        if product:
+            product.stock = max(product.stock - item.quantity, 0)
+
+    # Final commit
+    db.commit()
     return db_order
 
 
