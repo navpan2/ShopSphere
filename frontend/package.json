@@ -6,7 +6,8 @@
     "dev": "next dev --turbopack",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "test": "jest --passWithNoTests --coverage --watchAll=false"
   },
   "dependencies": {
     "axios": "^1.10.0",
@@ -20,6 +21,18 @@
     "@tailwindcss/postcss": "^4",
     "autoprefixer": "^10.4.21",
     "postcss": "^8.5.6",
-    "tailwindcss": "^4.1.10"
+    "tailwindcss": "^4.1.10",
+    "jest": "^29.7.0",
+    "@testing-library/react": "^15.0.0",
+    "@testing-library/jest-dom": "^6.1.5"
+  },
+  "jest": {
+    "testEnvironment": "jsdom",
+    "setupFilesAfterEnv": [
+      "<rootDir>/jest.setup.js"
+    ],
+    "moduleNameMapping": {
+      "^@/(.*)$": "<rootDir>/src/$1"
+    }
   }
 }

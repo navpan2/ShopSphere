@@ -3,6 +3,8 @@ from sqlalchemy.orm import Session
 from app import schemas, crud, database
 from jose import JWTError, jwt
 from fastapi.security import OAuth2PasswordBearer
+from app.events import event_producer  # Add this import
+from datetime import datetime  # Add this import
 from typing import List
 
 router = APIRouter(prefix="/orders", tags=["Orders"])
@@ -39,7 +41,25 @@ def place_order(
     user_id: int = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    return crud.create_order(db, user_id, order)
+    # Create the order
+    new_order = crud.create_order(db, user_id, order)
+
+    # 🔥 Send Kafka event for order creation
+    event_producer.send_order_event(
+        {
+            "event": "order_created",
+            "order_id": str(new_order.id),
+            "user_id": str(user_id),
+            "total": float(new_order.total),
+            "items_count": (
+                len(new_order.order_items) if hasattr(new_order, "order_items") else 0
+            ),
+            "status": "pending",
+            "timestamp": datetime.now().isoformat(),
+        }
+    )
+
+    return new_order
 
 
 # ✅ Get All Orders for Logged-in User
@@ -47,4 +67,16 @@ def place_order(
 def get_my_orders(
     user_id: int = Depends(get_current_user), db: Session = Depends(get_db)
 ):
-    return crud.get_user_orders(db, user_id)
+    orders = crud.get_user_orders(db, user_id)
+
+    # 🔥 Send Kafka event for orders view
+    event_producer.send_user_event(
+        {
+            "event": "orders_viewed",
+            "user_id": str(user_id),
+            "orders_count": len(orders),
+            "timestamp": datetime.now().isoformat(),
+        }
+    )
+
+    return orders
