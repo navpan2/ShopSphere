@@ -1,10 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from app import models, schemas
+from app import models, schemas, crud
 from app.database import get_db
 from app.routers.auth import get_current_user
-from app.events import event_producer  # Add this import
-from datetime import datetime  # Add this import
+from app.events import event_producer
+from datetime import datetime
 from typing import List
 
 router = APIRouter(prefix="/cart", tags=["Cart"])
@@ -12,7 +12,6 @@ router = APIRouter(prefix="/cart", tags=["Cart"])
 
 @router.get("/", response_model=List[schemas.CartItemOut])
 def get_cart(db: Session = Depends(get_db), user_id: int = Depends(get_current_user)):
-    # 🔥 Send Kafka event for cart view
     event_producer.send_user_event(
         {
             "event": "cart_viewed",
@@ -26,7 +25,6 @@ def get_cart(db: Session = Depends(get_db), user_id: int = Depends(get_current_u
 
 @router.delete("/clear")
 def clear_cart(user_id: int = Depends(get_current_user), db: Session = Depends(get_db)):
-    # Get cart items count before clearing
     cart_items = (
         db.query(models.CartItem).filter(models.CartItem.user_id == user_id).all()
     )
@@ -35,7 +33,6 @@ def clear_cart(user_id: int = Depends(get_current_user), db: Session = Depends(g
     db.query(models.CartItem).filter(models.CartItem.user_id == user_id).delete()
     db.commit()
 
-    # 🔥 Send Kafka event for cart clearing
     event_producer.send_user_event(
         {
             "event": "cart_cleared",
@@ -54,50 +51,32 @@ def add_to_cart(
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user),
 ):
-    db_item = (
-        db.query(models.CartItem)
-        .filter(
-            models.CartItem.user_id == user_id,
-            models.CartItem.product_id == item.product_id,
+    """
+    Add item to cart with stock validation
+    """
+    try:
+        cart_item = crud.add_to_cart_safe(db, user_id, item.product_id, item.quantity)
+
+        # Get product for event
+        product = crud.get_product(db, item.product_id)
+
+        event_producer.send_user_event(
+            {
+                "event": "item_added_to_cart",
+                "user_id": str(user_id),
+                "product_id": str(item.product_id),
+                "product_name": product.name if product else "Unknown",
+                "quantity": item.quantity,
+                "timestamp": datetime.now().isoformat(),
+            }
         )
-        .first()
-    )
 
-    # Get product info for event
-    product = (
-        db.query(models.Product).filter(models.Product.id == item.product_id).first()
-    )
+        return cart_item
 
-    if db_item:
-        old_quantity = db_item.quantity
-        db_item.quantity += item.quantity
-        event_type = "cart_item_updated"
-    else:
-        old_quantity = 0
-        db_item = models.CartItem(
-            user_id=user_id, product_id=item.product_id, quantity=item.quantity
-        )
-        db.add(db_item)
-        event_type = "item_added_to_cart"
-
-    db.commit()
-    db.refresh(db_item)
-
-    # 🔥 Send Kafka event for cart addition/update
-    event_producer.send_user_event(
-        {
-            "event": event_type,
-            "user_id": str(user_id),
-            "product_id": str(item.product_id),
-            "product_name": product.name if product else "Unknown",
-            "quantity_added": item.quantity,
-            "old_quantity": old_quantity,
-            "new_quantity": db_item.quantity,
-            "timestamp": datetime.now().isoformat(),
-        }
-    )
-
-    return db_item
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.delete("/remove/{product_id}")
@@ -114,14 +93,12 @@ def remove_from_cart(
     if not item:
         raise HTTPException(status_code=404, detail="Item not found in cart")
 
-    # Get product info for event
     product = db.query(models.Product).filter(models.Product.id == product_id).first()
     removed_quantity = item.quantity
 
     db.delete(item)
     db.commit()
 
-    # 🔥 Send Kafka event for cart item removal
     event_producer.send_user_event(
         {
             "event": "item_removed_from_cart",
@@ -143,6 +120,12 @@ def update_quantity(
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user),
 ):
+    """
+    Update cart item quantity with validation
+    """
+    if quantity <= 0:
+        raise HTTPException(status_code=400, detail="Quantity must be positive")
+
     item = (
         db.query(models.CartItem)
         .filter_by(user_id=user_id, product_id=product_id)
@@ -151,21 +134,27 @@ def update_quantity(
     if not item:
         raise HTTPException(status_code=404, detail="Item not found in cart")
 
-    # Get product info for event
-    product = db.query(models.Product).filter(models.Product.id == product_id).first()
-    old_quantity = item.quantity
+    # Validate stock
+    product = crud.get_product(db, product_id)
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
 
+    if quantity > product.stock:
+        raise HTTPException(
+            status_code=400, detail=f"Only {product.stock} items available"
+        )
+
+    old_quantity = item.quantity
     item.quantity = quantity
     db.commit()
     db.refresh(item)
 
-    # 🔥 Send Kafka event for quantity update
     event_producer.send_user_event(
         {
             "event": "cart_quantity_updated",
             "user_id": str(user_id),
             "product_id": str(product_id),
-            "product_name": product.name if product else "Unknown",
+            "product_name": product.name,
             "old_quantity": old_quantity,
             "new_quantity": quantity,
             "timestamp": datetime.now().isoformat(),

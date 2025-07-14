@@ -4,6 +4,7 @@ from app.database import Base
 from sqlalchemy import DateTime
 from sqlalchemy.sql import func
 
+
 class User(Base):
     __tablename__ = "users"
     id = Column(Integer, primary_key=True, index=True)
@@ -12,6 +13,7 @@ class User(Base):
     is_admin = Column(Boolean, default=False)
     cart_items = relationship("CartItem", back_populates="user", cascade="all, delete")
 
+
 class Product(Base):
     __tablename__ = "products"
 
@@ -19,16 +21,10 @@ class Product(Base):
     name = Column(String)
     description = Column(String)
     price = Column(Float)
-    image_url = Column(String)  # ✅ NEW field
-    stock = Column(Integer, default=0)  
-
-# class Order(Base):
-#     __tablename__ = "orders"
-#     id = Column(Integer, primary_key=True, index=True)
-#     user_id = Column(Integer, ForeignKey("users.id"))
-#     total = Column(Float)
-#     status = Column(String, default="pending")
-#     user = relationship("User")
+    image_url = Column(String)
+    stock = Column(Integer, default=0)
+    version = Column(Integer, default=1)  # ✅ NEW: For optimistic locking
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())  # ✅ NEW
 
 
 class CartItem(Base):
@@ -50,10 +46,10 @@ class Order(Base):
     user_id = Column(Integer, ForeignKey("users.id"))
     total = Column(Float)
     status = Column(String, default="pending")
-    created_at = Column(DateTime, default=func.now())  # 🕒 optional
+    created_at = Column(DateTime, default=func.now())
 
     user = relationship("User")
-    items = relationship("OrderItem", back_populates="order")  # ✅ link to order_items
+    items = relationship("OrderItem", back_populates="order")
 
 
 class OrderItem(Base):
@@ -66,4 +62,4 @@ class OrderItem(Base):
     quantity = Column(Integer)
     price = Column(Float)
 
-    order = relationship("Order", back_populates="items")  # ✅ reverse relation
+    order = relationship("Order", back_populates="items")
