@@ -1,3 +1,5 @@
+version: '3.8'
+
 services:
   # Database
   postgres:
@@ -16,10 +18,14 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-    networks:
-      - shopsphere-network
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
 
-  # Redis for caching and sessions
+  # Redis
   redis:
     image: redis:7-alpine
     container_name: shopsphere_redis
@@ -32,10 +38,14 @@ services:
       interval: 10s
       timeout: 3s
       retries: 5
-    networks:
-      - shopsphere-network
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 128M
 
-  # Zookeeper for Kafka
+  # Zookeeper
   zookeeper:
     image: confluentinc/cp-zookeeper:7.4.0
     container_name: shopsphere_zookeeper
@@ -44,15 +54,13 @@ services:
       ZOOKEEPER_TICK_TIME: 2000
     ports:
       - "2181:2181"
-    networks:
-      - shopsphere-network
     healthcheck:
       test: ["CMD", "bash", "-c", "echo 'ruok' | nc localhost 2181"]
       interval: 10s
       timeout: 5s
       retries: 5
 
-  # Apache Kafka (FIXED VERSION)
+  # Kafka
   kafka:
     image: confluentinc/cp-kafka:7.4.0
     container_name: shopsphere_kafka
@@ -68,61 +76,17 @@ services:
       KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
-      KAFKA_LOG_RETENTION_HOURS: 168
-      KAFKA_LOG_SEGMENT_BYTES: 1073741824
-      KAFKA_LOG_RETENTION_BYTES: 1073741824
-    networks:
-      - shopsphere-network
     healthcheck:
       test: ["CMD", "kafka-topics", "--bootstrap-server", "localhost:9092", "--list"]
       interval: 30s
       timeout: 10s
       retries: 5
 
-  # Kafka UI
-  kafka-ui:
-    image: provectuslabs/kafka-ui:latest
-    container_name: shopsphere_kafka_ui
-    depends_on:
-      kafka:
-        condition: service_healthy
-    ports:
-      - "8080:8080"
-    environment:
-      KAFKA_CLUSTERS_0_NAME: local
-      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
-    networks:
-      - shopsphere-network
-
-  # Prometheus monitoring
-  prometheus:
-    image: prom/prometheus:latest
-    container_name: shopsphere_prometheus
-    ports:
-      - "9090:9090"
-    volumes:
-      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
-    networks:
-      - shopsphere-network
-
-  # Grafana dashboards
-  grafana:
-    image: grafana/grafana:latest
-    container_name: shopsphere_grafana
-    ports:
-      - "3001:3000"
-    environment:
-      - GF_SECURITY_ADMIN_PASSWORD=admin
-    volumes:
-      - grafana_data:/var/lib/grafana
-    networks:
-      - shopsphere-network
-
-  # Backend API
+  # Backend
   backend:
     build:
       context: ./backend
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.optimized
     container_name: shopsphere_backend
     environment:
       - DATABASE_URL=postgresql://user:password@postgres:5432/shopdb
@@ -139,9 +103,19 @@ services:
         condition: service_healthy
     volumes:
       - ./backend:/app
-    networks:
-      - shopsphere-network
-    command: sh -c "sleep 20 && alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '0.5'
+        reservations:
+          memory: 512M
+          cpus: '0.25'
 
   # Frontend
   frontend:
@@ -158,15 +132,19 @@ services:
     volumes:
       - ./frontend:/app
       - /app/node_modules
-    networks:
-      - shopsphere-network
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '0.5'
+        reservations:
+          memory: 512M
+          cpus: '0.25'
 
-  
 volumes:
   pgdata:
   redis_data:
-  grafana_data:
 
 networks:
-  shopsphere-network:
-    driver: bridge
+  default:
+    name: shopsphere-network

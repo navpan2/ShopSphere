@@ -161,7 +161,21 @@ services:
     networks:
       - shopsphere-network
 
-  
+  # Nginx reverse proxy
+  nginx:
+    image: nginx:alpine
+    container_name: shopsphere_nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf
+    depends_on:
+      - frontend
+      - backend
+    networks:
+      - shopsphere-network
+
 volumes:
   pgdata:
   redis_data:

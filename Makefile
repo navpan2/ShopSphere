@@ -28,7 +28,6 @@ restart:
 # Health check
 health:
 	@echo "🔍 Checking service health..."
-	@curl -f http://localhost:80/health || echo "❌ Nginx: DOWN"
 	@curl -f http://localhost:8001/health || echo "❌ Backend: DOWN"
 	@curl -f http://localhost:3000 || echo "❌ Frontend: DOWN"
 	@curl -f http://localhost:9090/-/healthy || echo "❌ Prometheus: DOWN"
@@ -118,7 +117,6 @@ urls:
 	@echo "Prometheus: http://localhost:9090"
 	@echo "Grafana: http://localhost:3001 (admin/admin)"
 	@echo "Kafka UI: http://localhost:8080"
-	@echo "Nginx: http://localhost:80"
 
 # Load testing
 load-test:

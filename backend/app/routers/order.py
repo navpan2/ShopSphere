@@ -1,10 +1,11 @@
+# backend/app/routers/order.py - UPDATED VERSION
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from app import schemas, crud, database
 from jose import JWTError, jwt
 from fastapi.security import OAuth2PasswordBearer
-from app.events import event_producer  # Add this import
-from datetime import datetime  # Add this import
+from app.events import event_producer
+from datetime import datetime
 from typing import List
 
 router = APIRouter(prefix="/orders", tags=["Orders"])
@@ -34,7 +35,7 @@ def get_current_user(token: str = Depends(oauth2_scheme)):
         raise HTTPException(status_code=401, detail="Invalid token")
 
 
-# ✅ Create Order
+# ✅ Create Order - FIXED VERSION
 @router.post("/", response_model=schemas.OrderOut)
 def place_order(
     order: schemas.OrderCreate,
@@ -44,17 +45,24 @@ def place_order(
     # Create the order
     new_order = crud.create_order(db, user_id, order)
 
-    # 🔥 Send Kafka event for order creation
+    # 🔥 Send FIXED Kafka event for order creation
     event_producer.send_order_event(
         {
             "event": "order_created",
             "order_id": str(new_order.id),
             "user_id": str(user_id),
             "total": float(new_order.total),
-            "items_count": (
-                len(new_order.order_items) if hasattr(new_order, "order_items") else 0
-            ),
-            "status": "pending",
+            "items_count": len(order.items),  # ✅ FIXED: Use actual items count
+            "status": new_order.status,  # ✅ FIXED: Use actual status
+            "items": [  # ✅ NEW: Include actual items data
+                {
+                    "product_id": item.product_id,
+                    "product_name": item.product_name,
+                    "quantity": item.quantity,
+                    "price": float(item.price),
+                }
+                for item in order.items
+            ],
             "timestamp": datetime.now().isoformat(),
         }
     )
