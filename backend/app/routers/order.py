@@ -1,7 +1,7 @@
-# backend/app/routers/order.py - UPDATED VERSION
+# backend/app/routers/order.py - FIXED WITH USER EMAIL
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from app import schemas, crud, database
+from app import schemas, crud, database, models
 from jose import JWTError, jwt
 from fastapi.security import OAuth2PasswordBearer
 from app.events import event_producer
@@ -35,7 +35,7 @@ def get_current_user(token: str = Depends(oauth2_scheme)):
         raise HTTPException(status_code=401, detail="Invalid token")
 
 
-# ✅ Create Order - FIXED VERSION
+# ✅ Create Order - FIXED WITH USER EMAIL
 @router.post("/", response_model=schemas.OrderOut)
 def place_order(
     order: schemas.OrderCreate,
@@ -45,27 +45,36 @@ def place_order(
     # Create the order
     new_order = crud.create_order(db, user_id, order)
 
-    # 🔥 Send FIXED Kafka event for order creation
-    event_producer.send_order_event(
-        {
-            "event": "order_created",
-            "order_id": str(new_order.id),
-            "user_id": str(user_id),
-            "total": float(new_order.total),
-            "items_count": len(order.items),  # ✅ FIXED: Use actual items count
-            "status": new_order.status,  # ✅ FIXED: Use actual status
-            "items": [  # ✅ NEW: Include actual items data
-                {
-                    "product_id": item.product_id,
-                    "product_name": item.product_name,
-                    "quantity": item.quantity,
-                    "price": float(item.price),
-                }
-                for item in order.items
-            ],
-            "timestamp": datetime.now().isoformat(),
-        }
-    )
+    # ✅ Get user email for notification
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    user_email = user.email if user else None
+
+    # 🔥 Send FIXED Kafka event with user email
+    try:
+        event_producer.send_order_event(
+            {
+                "event": "order_created",
+                "order_id": str(new_order.id),
+                "user_id": str(user_id),
+                "user_email": user_email,  # ✅ FIXED: Include actual user email
+                "total": float(new_order.total),
+                "items_count": len(order.items),
+                "status": new_order.status,
+                "items": [
+                    {
+                        "product_id": item.product_id,
+                        "product_name": item.product_name,
+                        "quantity": item.quantity,
+                        "price": float(item.price),
+                    }
+                    for item in order.items
+                ],
+                "timestamp": datetime.now().isoformat(),
+            }
+        )
+        print(f"✅ Order event sent with user email: {user_email}")
+    except Exception as e:
+        print(f"❌ Failed to send order event: {e}")
 
     return new_order
 
@@ -78,13 +87,16 @@ def get_my_orders(
     orders = crud.get_user_orders(db, user_id)
 
     # 🔥 Send Kafka event for orders view
-    event_producer.send_user_event(
-        {
-            "event": "orders_viewed",
-            "user_id": str(user_id),
-            "orders_count": len(orders),
-            "timestamp": datetime.now().isoformat(),
-        }
-    )
+    try:
+        event_producer.send_user_event(
+            {
+                "event": "orders_viewed",
+                "user_id": str(user_id),
+                "orders_count": len(orders),
+                "timestamp": datetime.now().isoformat(),
+            }
+        )
+    except Exception as e:
+        print(f"❌ Failed to send orders viewed event: {e}")
 
     return orders
