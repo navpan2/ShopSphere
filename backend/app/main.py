@@ -20,25 +20,26 @@ load_dotenv()
 app = FastAPI(
     title="ShopSphere API", description="E-commerce Backend API", version="1.0.0"
 )
-RAILWAY_STATIC_URL = os.getenv("RAILWAY_STATIC_URL", "")
-FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
-origins = [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-]
-# Register cleanup function
 atexit.register(cleanup_kafka)
-
-# Prometheus metrics
 REQUEST_COUNT = Counter(
     "http_requests_total", "Total HTTP requests", ["method", "endpoint"]
 )
 REQUEST_LATENCY = Histogram("http_request_duration_seconds", "HTTP request latency")
 
-# CORS (for frontend dev)
+RAILWAY_STATIC_URL = os.getenv("RAILWAY_STATIC_URL", "")
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
+
+# CORS origins
+origins = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
+
+# Add Railway URLs
 if RAILWAY_STATIC_URL:
-    origins.append(f"https://{RAILWAY_STATIC_URL}")
-if FRONTEND_URL and FRONTEND_URL not in origins:
+    origins.extend([f"https://{RAILWAY_STATIC_URL}", f"http://{RAILWAY_STATIC_URL}"])
+
+if FRONTEND_URL != "http://localhost:3000":
     origins.append(FRONTEND_URL)
 
 app.add_middleware(
@@ -48,8 +49,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
 # Prometheus middleware
 @app.middleware("http")
 async def add_prometheus_metrics(request: Request, call_next):
@@ -72,8 +71,6 @@ app.include_router(cart.router)
 @app.get("/")
 def root():
     return {"message": "ShopSphere API is live!"}
-
-
 
 
 @app.get("/health")
