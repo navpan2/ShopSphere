@@ -8,14 +8,24 @@ from datetime import datetime
 from prometheus_client import Counter, Histogram, generate_latest
 import time
 import atexit
+import os
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 # Import Kafka cleanup
 from app.events import cleanup_kafka
 
 load_dotenv()
 
-app = FastAPI()
-
+app = FastAPI(
+    title="ShopSphere API", description="E-commerce Backend API", version="1.0.0"
+)
+RAILWAY_STATIC_URL = os.getenv("RAILWAY_STATIC_URL", "")
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
+origins = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
 # Register cleanup function
 atexit.register(cleanup_kafka)
 
@@ -26,9 +36,14 @@ REQUEST_COUNT = Counter(
 REQUEST_LATENCY = Histogram("http_request_duration_seconds", "HTTP request latency")
 
 # CORS (for frontend dev)
+if RAILWAY_STATIC_URL:
+    origins.append(f"https://{RAILWAY_STATIC_URL}")
+if FRONTEND_URL and FRONTEND_URL not in origins:
+    origins.append(FRONTEND_URL)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Change in production
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -59,6 +74,8 @@ def root():
     return {"message": "ShopSphere API is live!"}
 
 
+
+
 @app.get("/health")
 async def health_check():
     # Check Kafka connectivity
@@ -70,6 +87,7 @@ async def health_check():
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
         "version": "1.0.0",
+        "environment": os.getenv("RAILWAY_ENVIRONMENT", "development"),
         "services": {
             "database": "connected",
             "redis": "connected",

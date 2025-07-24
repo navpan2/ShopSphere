@@ -1,47 +1,24 @@
-// ShopSphere/frontend/next.config.mjs (Updated with your existing config)
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  // Enable standalone output for Docker
-  output: "standalone",
-
-  // API proxy configuration
-  async rewrites() {
-    return [
-      {
-        source: "/api/:path*",
-        destination: "http://backend:8001/:path*", // Proxy to Backend
-      },
-    ];
-  },
+  // Railway optimization
+  output: process.env.NODE_ENV === "production" ? "standalone" : undefined,
 
   // Environment variables
   env: {
     NEXT_PUBLIC_API_URL:
       process.env.NEXT_PUBLIC_API_URL || "http://localhost:8001",
+    RAILWAY_ENVIRONMENT: process.env.RAILWAY_ENVIRONMENT || "development",
   },
 
-  // Image optimization (merged with your existing domains)
+  // Optimize for Railway
+  experimental: {
+    outputFileTracingRoot: undefined, // Let Railway handle this
+  },
+
+  // Image optimization
   images: {
-    domains: ["images.unsplash.com", "plus.unsplash.com", "localhost"],
-  },
-
-  // Headers for security
-  async headers() {
-    return [
-      {
-        source: "/:path*",
-        headers: [
-          {
-            key: "X-Frame-Options",
-            value: "DENY",
-          },
-          {
-            key: "X-Content-Type-Options",
-            value: "nosniff",
-          },
-        ],
-      },
-    ];
+    domains: ["images.unsplash.com", "plus.unsplash.com"],
+    unoptimized: process.env.NODE_ENV === "production", // Reduce build time
   },
 };
 

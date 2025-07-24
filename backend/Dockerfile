@@ -1,40 +1,34 @@
-# ShopSphere/backend/Dockerfile (Improved version)
 FROM python:3.11-slim
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    PIP_NO_CACHE_DIR=1
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
+# Install system dependencies (minimal)
+RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
-    postgresql-client \
+    libpq-dev \
     curl \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
 
-# Create app directory
 WORKDIR /app
 
-# Copy requirements first for better caching
+# Copy requirements and install Python dependencies
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-deps -r requirements.txt
 
 # Copy application code
 COPY . .
 
 # Create non-root user
-RUN groupadd -r appuser && useradd -r -g appuser appuser
-RUN chown -R appuser:appuser /app
-USER appuser
+RUN useradd -m -u 1000 railway && chown -R railway:railway /app
+USER railway
 
-# Expose port
-EXPOSE 8001
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD curl -f http://localhost:${PORT:-8001}/health || exit 1
 
-# Remove health check for now since you don't have /health endpoint
-# HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-#     CMD curl -f http://localhost:8001/health || exit 1
-
-# Run the application
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8001", "--reload"]
+# Railway provides PORT environment variable
+CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8001}"]
