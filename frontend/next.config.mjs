@@ -1,24 +1,23 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   // Railway optimization
-  output: process.env.NODE_ENV === "production" ? "standalone" : undefined,
+  output: "standalone",
 
-  // Environment variables
+  // Use Railway's PORT environment variable
   env: {
+    PORT: process.env.PORT || 3000,
     NEXT_PUBLIC_API_URL:
       process.env.NEXT_PUBLIC_API_URL || "http://localhost:8001",
-    RAILWAY_ENVIRONMENT: process.env.RAILWAY_ENVIRONMENT || "development",
-  },
-
-  // Optimize for Railway
-  experimental: {
-    outputFileTracingRoot: undefined, // Let Railway handle this
   },
 
   // Image optimization
   images: {
     domains: ["images.unsplash.com", "plus.unsplash.com"],
-    unoptimized: process.env.NODE_ENV === "production", // Reduce build time
+  },
+
+  // Railway-specific config
+  experimental: {
+    outputFileTracingRoot: undefined,
   },
 };
 

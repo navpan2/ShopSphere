@@ -5,8 +5,8 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 
-# Install ALL dependencies (including devDependencies for build)
-RUN npm install --legacy-peer-deps && npm cache clean --force
+# Install dependencies
+RUN npm install
 
 # Copy source code
 COPY . .
@@ -18,16 +18,17 @@ RUN npm run build
 RUN addgroup -g 1001 -S nodejs
 RUN adduser -S nextjs -u 1001
 
-# Change ownership of the app directory
+# Change ownership
 RUN chown -R nextjs:nodejs /app
+
 USER nextjs
 
-# Railway provides PORT environment variable
+# Railway will provide the PORT environment variable
 EXPOSE $PORT
 
-# Health check
+# Health check using the dynamic port
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:${PORT:-3000} || exit 1
+    CMD wget --no-verbose --tries=1 --spider http://localhost:${PORT:-3000}/health || exit 1
 
-# Start the application
+# Start command that uses Railway's PORT
 CMD ["sh", "-c", "npm start -- --port ${PORT:-3000}"]
