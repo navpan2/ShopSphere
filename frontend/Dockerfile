@@ -5,8 +5,8 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 
-# Install with legacy peer deps (ignores conflicts)
-RUN npm install --legacy-peer-deps --only=production && npm cache clean --force
+# Install ALL dependencies (including devDependencies for build)
+RUN npm install --legacy-peer-deps && npm cache clean --force
 
 # Copy source code
 COPY . .
@@ -17,6 +17,9 @@ RUN npm run build
 # Create non-root user
 RUN addgroup -g 1001 -S nodejs
 RUN adduser -S nextjs -u 1001
+
+# Change ownership of the app directory
+RUN chown -R nextjs:nodejs /app
 USER nextjs
 
 # Railway provides PORT environment variable
