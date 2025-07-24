@@ -1,0 +1,448 @@
+# ShopSphere CI/CD Docker Compose
+# ================================
+# Resume-worthy: Multi-service orchestration, Environment management, Testing setup
+
+version: '3.8'
+
+services:
+  # ======================================
+  # 🗄️ DATABASE SERVICES
+  # ======================================
+  postgres:
+    image: postgres:14-alpine
+    container_name: shopsphere_postgres_ci
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: shopdb
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8"
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data_ci:/var/lib/postgresql/data
+      - ./scripts/init-test-db.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d shopdb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - shopsphere-ci
+
+  redis:
+    image: redis:7-alpine
+    container_name: shopsphere_redis_ci
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes --appendfsync everysec
+    volumes:
+      - redis_data_ci:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - shopsphere-ci
+
+  # ======================================
+  # 🔄 MESSAGE QUEUE
+  # ======================================
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.4.0
+    container_name: shopsphere_zookeeper_ci
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+      ZOOKEEPER_LOG4J_ROOT_LOGLEVEL: WARN
+    ports:
+      - "2181:2181"
+    healthcheck:
+      test: ["CMD", "bash", "-c", "echo 'ruok' | nc localhost 2181"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+    networks:
+      - shopsphere-ci
+
+  kafka:
+    image: confluentinc/cp-kafka:7.4.0
+    container_name: shopsphere_kafka_ci
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+      KAFKA_NUM_PARTITIONS: 3
+      KAFKA_LOG_RETENTION_HOURS: 1
+      KAFKA_LOG4J_ROOT_LOGLEVEL: WARN
+    healthcheck:
+      test: ["CMD", "kafka-topics", "--bootstrap-server", "localhost:9092", "--list"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - shopsphere-ci
+
+  # ======================================
+  # 🚀 APPLICATION SERVICES
+  # ======================================
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: ${BUILD_TARGET:-development}
+    container_name: shopsphere_backend_ci
+    environment:
+      - NODE_ENV=test
+      - DATABASE_URL=postgresql://user:password@postgres:5432/shopdb
+      - REDIS_URL=redis://redis:6379
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - SECRET_KEY=test-secret-key-for-ci
+      - DEBUG=true
+      - LOG_LEVEL=INFO
+      # Test-specific settings
+      - TESTING=true
+      - DISABLE_AUTH=false
+      - RATE_LIMIT_ENABLED=false
+    ports:
+      - "8001:8001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+      - backend_test_data:/app/test_data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - shopsphere-ci
+    command: >
+      sh -c "
+        echo '⏳ Waiting for dependencies...' &&
+        sleep 20 &&
+        echo '🔄 Running database migrations...' &&
+        alembic upgrade head &&
+        echo '🚀 Starting backend service...' &&
+        uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload
+      "
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: ${BUILD_TARGET:-development}
+      args:
+        - NODE_ENV=test
+    container_name: shopsphere_frontend_ci
+    environment:
+      - NODE_ENV=test
+      - NEXT_PUBLIC_API_URL=http://backend:8001
+      - NEXT_PUBLIC_ENVIRONMENT=ci
+      - CI=true
+    ports:
+      - "3000:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - shopsphere-ci
+
+  # ======================================
+  # 🔬 MICROSERVICES
+  # ======================================
+  analytics:
+    build:
+      context: ./microservices/analytics-service
+      dockerfile: Dockerfile
+    container_name: shopsphere_analytics_ci
+    environment:
+      - NODE_ENV=test
+      - REDIS_URL=redis://redis:6379
+      - REDIS_DB=1
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - KAFKA_CONSUMER_GROUP=analytics-service-ci
+      - LOG_LEVEL=INFO
+      - DEBUG=true
+    ports:
+      - "8002:8002"
+    depends_on:
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    volumes:
+      - ./microservices/analytics-service:/app
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - shopsphere-ci
+
+  notifications:
+    build:
+      context: ./microservices/notification-service
+      dockerfile: Dockerfile
+    container_name: shopsphere_notifications_ci
+    environment:
+      - NODE_ENV=test
+      - REDIS_URL=redis://redis:6379
+      - REDIS_DB=2
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - KAFKA_CONSUMER_GROUP=notification-service-ci
+      - LOG_LEVEL=INFO
+      # Test SMTP settings (using mock server)
+      - SMTP_SERVER=mailhog
+      - SMTP_PORT=1025
+      - SMTP_USERNAME=test
+      - SMTP_PASSWORD=test
+      - FROM_EMAIL=test@shopsphere.com
+      - FROM_NAME=ShopSphere CI
+      - ADMIN_EMAIL=admin@shopsphere.com
+    ports:
+      - "8003:8003"
+    depends_on:
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      mailhog:
+        condition: service_started
+    volumes:
+      - ./microservices/notification-service:/app
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - shopsphere-ci
+
+  # ======================================
+  # 🧪 TESTING SERVICES
+  # ======================================
+  mailhog:
+    image: mailhog/mailhog:latest
+    container_name: shopsphere_mailhog_ci
+    ports:
+      - "1025:1025"  # SMTP
+      - "8025:8025"  # Web UI
+    networks:
+      - shopsphere-ci
+
+  # Test database for isolated testing
+  test-postgres:
+    image: postgres:14-alpine
+    container_name: shopsphere_test_postgres
+    environment:
+      POSTGRES_USER: testuser
+      POSTGRES_PASSWORD: testpass
+      POSTGRES_DB: testdb
+    ports:
+      - "5433:5432"
+    volumes:
+      - test_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U testuser -d testdb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - shopsphere-ci
+    profiles:
+      - testing
+
+  # ======================================
+  # 📊 MONITORING & OBSERVABILITY
+  # ======================================
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: shopsphere_prometheus_ci
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.ci.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data_ci:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+      - '--storage.tsdb.retention.time=1h'
+      - '--web.enable-lifecycle'
+    networks:
+      - shopsphere-ci
+    profiles:
+      - monitoring
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: shopsphere_grafana_ci
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_INSTALL_PLUGINS=grafana-piechart-panel
+    volumes:
+      - grafana_data_ci:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources
+    depends_on:
+      - prometheus
+    networks:
+      - shopsphere-ci
+    profiles:
+      - monitoring
+
+  # ======================================
+  # 🧪 TEST RUNNERS
+  # ======================================
+  test-runner:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    container_name: shopsphere_test_runner
+    environment:
+      - CI=true
+      - NODE_ENV=test
+      - DATABASE_URL=postgresql://testuser:testpass@test-postgres:5432/testdb
+      - REDIS_URL=redis://redis:6379
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - BACKEND_URL=http://backend:8001
+      - FRONTEND_URL=http://frontend:3000
+      - ANALYTICS_URL=http://analytics:8002
+      - NOTIFICATIONS_URL=http://notifications:8003
+    volumes:
+      - .:/workspace
+      - test_results:/workspace/test-results
+      - test_coverage:/workspace/coverage
+    depends_on:
+      - backend
+      - frontend
+      - analytics
+      - notifications
+      - test-postgres
+    networks:
+      - shopsphere-ci
+    profiles:
+      - testing
+    command: >
+      sh -c "
+        echo '🧪 Starting comprehensive test suite...' &&
+        chmod +x /workspace/scripts/test-services.sh &&
+        /workspace/scripts/test-services.sh all
+      "
+
+  # ======================================
+  # 🔒 SECURITY SCANNER
+  # ======================================
+  security-scanner:
+    image: aquasec/trivy:latest
+    container_name: shopsphere_security_scanner
+    volumes:
+      - .:/workspace
+      - trivy_cache:/root/.cache/trivy
+    working_dir: /workspace
+    networks:
+      - shopsphere-ci
+    profiles:
+      - security
+    command: >
+      sh -c "
+        echo '🔒 Running security scans...' &&
+        trivy fs --exit-code 0 --severity HIGH,CRITICAL --format table . &&
+        trivy fs --exit-code 0 --severity HIGH,CRITICAL --format json --output /workspace/security-report.json .
+      "
+
+  # ======================================
+  # 📈 PERFORMANCE TESTER
+  # ======================================
+  k6:
+    image: grafana/k6:latest
+    container_name: shopsphere_k6_ci
+    volumes:
+      - ./tests/performance:/scripts
+      - k6_results:/results
+    environment:
+      - K6_OUT=json=/results/k6-results.json
+    depends_on:
+      - backend
+      - frontend
+    networks:
+      - shopsphere-ci
+    profiles:
+      - performance
+    command: run --vus 10 --duration 30s /scripts/load-test.js
+
+# ======================================
+# 📦 VOLUMES
+# ======================================
+volumes:
+  postgres_data_ci:
+    driver: local
+  redis_data_ci:
+    driver: local
+  test_postgres_data:
+    driver: local
+  prometheus_data_ci:
+    driver: local
+  grafana_data_ci:
+    driver: local
+  backend_test_data:
+    driver: local
+  test_results:
+    driver: local
+  test_coverage:
+    driver: local
+  trivy_cache:
+    driver: local
+  k6_results:
+    driver: local
+
+# ======================================
+# 🌐 NETWORKS
+# ======================================
+networks:
+  shopsphere-ci:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.25.0.0/16
+
+# ======================================
+# 🎯 PROFILES USAGE
+# ======================================
+# Basic CI:        docker-compose -f docker-compose.ci.yml up -d
+# With Testing:    docker-compose -f docker-compose.ci.yml --profile testing up -d
+# With Monitoring: docker-compose -f docker-compose.ci.yml --profile monitoring up -d
+# With Security:   docker-compose -f docker-compose.ci.yml --profile security up -d
+# With Performance:docker-compose -f docker-compose.ci.yml --profile performance up -d
+# Full Suite:      docker-compose -f docker-compose.ci.yml --profile testing --profile monitoring --profile security --profile performance up -d

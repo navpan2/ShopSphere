@@ -1,0 +1,295 @@
+# ShopSphere Deployment Pipeline
+# ===============================
+# Resume-worthy: Multi-environment deployment, Blue-green deployment, Rollback
+name: 🚀 Deploy Pipeline
+
+on:
+  workflow_run:
+    workflows: ["🚀 CI Pipeline"]
+    branches: [main]
+    types: [completed]
+  
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+        - staging
+        - production
+      service:
+        description: 'Service to deploy (or all)'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+        - all
+        - backend
+        - frontend
+        - analytics
+        - notifications
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # ======================================
+  # 🎯 DEPLOYMENT STRATEGY
+  # ======================================
+  deploy:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
+    
+    environment: 
+      name: ${{ github.event.inputs.environment || 'staging' }}
+      url: ${{ steps.deploy.outputs.url }}
+    
+    strategy:
+      matrix:
+        service: [backend, frontend, analytics, notifications]
+    
+    steps:
+      - name: 📥 Checkout Code
+        uses: actions/checkout@v4
+
+      - name: 🔍 Check if service should deploy
+        id: should-deploy
+        run: |
+          if [[ "${{ github.event.inputs.service }}" == "${{ matrix.service }}" || "${{ github.event.inputs.service }}" == "all" || "${{ github.event.inputs.service }}" == "" ]]; then
+            echo "deploy=true" >> $GITHUB_OUTPUT
+          else
+            echo "deploy=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: 🌍 Set Environment Variables
+        if: steps.should-deploy.outputs.deploy == 'true'
+        run: |
+          ENV_NAME="${{ github.event.inputs.environment || 'staging' }}"
+          echo "ENVIRONMENT=$ENV_NAME" >> $GITHUB_ENV
+          echo "DEPLOY_URL=https://${{ matrix.service }}-$ENV_NAME.yourdomain.com" >> $GITHUB_ENV
+          
+          # Set environment-specific variables
+          if [[ "$ENV_NAME" == "production" ]]; then
+            echo "REPLICA_COUNT=3" >> $GITHUB_ENV
+            echo "CPU_LIMIT=1000m" >> $GITHUB_ENV
+            echo "MEMORY_LIMIT=1Gi" >> $GITHUB_ENV
+          else
+            echo "REPLICA_COUNT=1" >> $GITHUB_ENV
+            echo "CPU_LIMIT=500m" >> $GITHUB_ENV
+            echo "MEMORY_LIMIT=512Mi" >> $GITHUB_ENV
+          fi
+
+      # ======================================
+      # 🐳 DOCKER DEPLOYMENT (Simple but effective)
+      # ======================================
+      - name: 🔑 Login to Container Registry
+        if: steps.should-deploy.outputs.deploy == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 🚀 Deploy to ${{ env.ENVIRONMENT }}
+        if: steps.should-deploy.outputs.deploy == 'true'
+        id: deploy
+        run: |
+          echo "🚀 Deploying ${{ matrix.service }} to ${{ env.ENVIRONMENT }}"
+          
+          # Create deployment directory
+          mkdir -p deployments/${{ env.ENVIRONMENT }}
+          
+          # Generate docker-compose for this environment
+          cat > deployments/${{ env.ENVIRONMENT }}/docker-compose.yml << EOF
+          version: '3.8'
+          services:
+            ${{ matrix.service }}:
+              image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/${{ matrix.service }}:latest
+              restart: unless-stopped
+              environment:
+                - NODE_ENV=${{ env.ENVIRONMENT }}
+                - DATABASE_URL=\${DATABASE_URL}
+                - REDIS_URL=\${REDIS_URL}
+              deploy:
+                replicas: ${{ env.REPLICA_COUNT }}
+                resources:
+                  limits:
+                    cpus: '${{ env.CPU_LIMIT }}'
+                    memory: ${{ env.MEMORY_LIMIT }}
+              healthcheck:
+                test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+                interval: 30s
+                timeout: 10s
+                retries: 3
+              labels:
+                - "traefik.enable=true"
+                - "traefik.http.routers.${{ matrix.service }}.rule=Host(\`${{ matrix.service }}-${{ env.ENVIRONMENT }}.yourdomain.com\`)"
+          EOF
+          
+          # Deploy the service
+          docker-compose -f deployments/${{ env.ENVIRONMENT }}/docker-compose.yml pull
+          docker-compose -f deployments/${{ env.ENVIRONMENT }}/docker-compose.yml up -d
+          
+          echo "url=${{ env.DEPLOY_URL }}" >> $GITHUB_OUTPUT
+
+      # ======================================
+      # 🏥 HEALTH CHECKS (Production readiness)
+      # ======================================
+      - name: 🏥 Health Check
+        if: steps.should-deploy.outputs.deploy == 'true'
+        run: |
+          echo "⏳ Waiting for ${{ matrix.service }} to be healthy..."
+          
+          for i in {1..30}; do
+            if curl -f -s http://localhost:800$i/health > /dev/null 2>&1; then
+              echo "✅ ${{ matrix.service }} is healthy!"
+              break
+            fi
+            echo "⏳ Attempt $i/30 - waiting..."
+            sleep 10
+          done
+          
+          # Final health check
+          if ! curl -f http://localhost:800$i/health; then
+            echo "❌ Health check failed for ${{ matrix.service }}"
+            exit 1
+          fi
+
+      # ======================================
+      # 🔄 ROLLBACK MECHANISM (Risk management)
+      # ======================================
+      - name: 🔄 Setup Rollback
+        if: steps.should-deploy.outputs.deploy == 'true'
+        run: |
+          # Save current deployment info for rollback
+          echo "${{ github.sha }}" > deployments/${{ env.ENVIRONMENT }}/${{ matrix.service }}-current.txt
+          echo "✅ Rollback point saved: ${{ github.sha }}"
+
+  # ======================================
+  # 🧪 SMOKE TESTS (Post-deployment validation)
+  # ======================================
+  smoke-tests:
+    runs-on: ubuntu-latest
+    needs: deploy
+    if: always() && needs.deploy.result == 'success'
+    
+    steps:
+      - name: 📥 Checkout Code
+        uses: actions/checkout@v4
+
+      - name: 🧪 Run Smoke Tests
+        run: |
+          ENV_NAME="${{ github.event.inputs.environment || 'staging' }}"
+          
+          echo "🧪 Running smoke tests for $ENV_NAME environment..."
+          
+          # Test each service
+          services=("backend" "frontend" "analytics" "notifications")
+          for service in "${services[@]}"; do
+            echo "Testing $service..."
+            
+            # Basic connectivity test
+            if curl -f "https://$service-$ENV_NAME.yourdomain.com/health" > /dev/null 2>&1; then
+              echo "✅ $service is responding"
+            else
+              echo "❌ $service health check failed"
+              exit 1
+            fi
+          done
+          
+          echo "✅ All smoke tests passed!"
+
+  # ======================================
+  # 📊 DEPLOYMENT SUMMARY (Visibility)
+  # ======================================
+  notify-deployment:
+    runs-on: ubuntu-latest
+    needs: [deploy, smoke-tests]
+    if: always()
+    
+    steps:
+      - name: 📊 Generate Deployment Summary
+        run: |
+          ENV_NAME="${{ github.event.inputs.environment || 'staging' }}"
+          SERVICE="${{ github.event.inputs.service || 'all' }}"
+          
+          if [[ "${{ needs.deploy.result }}" == "success" && "${{ needs.smoke-tests.result }}" == "success" ]]; then
+            echo "STATUS=success" >> $GITHUB_ENV
+            echo "MESSAGE=🎉 Deployment Successful!" >> $GITHUB_ENV
+          else
+            echo "STATUS=failure" >> $GITHUB_ENV
+            echo "MESSAGE=❌ Deployment Failed!" >> $GITHUB_ENV
+          fi
+
+      - name: 📢 Slack Notification
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ env.STATUS }}
+          text: |
+            ${{ env.MESSAGE }}
+            
+            🎯 Environment: ${{ github.event.inputs.environment || 'staging' }}
+            🚀 Service: ${{ github.event.inputs.service || 'all' }}
+            📊 Commit: ${{ github.sha }}
+            🔗 URL: ${{ steps.deploy.outputs.url }}
+            
+            ${{ env.STATUS == 'success' && '✅ All services healthy' || '❌ Check deployment logs' }}
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+  # ======================================
+  # 🔄 ROLLBACK JOB (Disaster recovery)
+  # ======================================
+  rollback:
+    runs-on: ubuntu-latest
+    if: failure() && github.event.inputs.environment == 'production'
+    needs: [deploy, smoke-tests]
+    
+    steps:
+      - name: 📥 Checkout Code
+        uses: actions/checkout@v4
+
+      - name: 🔄 Automatic Rollback
+        run: |
+          echo "🔄 Starting automatic rollback for production..."
+          
+          ENV_NAME="production"
+          SERVICE="${{ github.event.inputs.service || 'all' }}"
+          
+          # Get previous successful deployment
+          if [[ -f "deployments/$ENV_NAME/$SERVICE-previous.txt" ]]; then
+            PREVIOUS_SHA=$(cat deployments/$ENV_NAME/$SERVICE-previous.txt)
+            echo "🔄 Rolling back to: $PREVIOUS_SHA"
+            
+            # Rollback using previous image
+            docker-compose -f deployments/$ENV_NAME/docker-compose.yml down
+            
+            # Update docker-compose to use previous image
+            sed -i "s/:latest/:commit-$PREVIOUS_SHA/g" deployments/$ENV_NAME/docker-compose.yml
+            
+            # Deploy previous version
+            docker-compose -f deployments/$ENV_NAME/docker-compose.yml up -d
+            
+            echo "✅ Rollback completed!"
+          else
+            echo "❌ No previous deployment found for rollback"
+            exit 1
+          fi
+
+      - name: 📢 Rollback Notification
+        uses: 8398a7/action-slack@v3
+        with:
+          status: warning
+          text: |
+            🔄 AUTOMATIC ROLLBACK EXECUTED
+            
+            Environment: Production
+            Service: ${{ github.event.inputs.service || 'all' }}
+            Reason: Deployment failure detected
+            
+            ⚠️ Please investigate the failed deployment
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}

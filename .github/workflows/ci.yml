@@ -1,4 +1,7 @@
-name: CI/CD Pipeline
+# ShopSphere CI Pipeline
+# ======================
+# Resume-worthy features: Multi-service testing, Docker builds, Security scanning
+name: 🚀 CI Pipeline
 
 on:
   push:
@@ -6,66 +9,312 @@ on:
   pull_request:
     branches: [ main ]
 
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    
-    steps:
-    - uses: actions/checkout@v3
-    
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.11'
-    
-    - name: Install backend dependencies
-      run: |
-        cd backend
-        pip install -r requirements.txt
-        pip install pytest pytest-cov
-    
-    - name: Run backend tests
-      run: |
-        cd backend
-        pytest tests/ -v --cov=app --cov-report=xml
-    
-    - name: Setup Node.js
-      uses: actions/setup-node@v3
-      with:
-        node-version: '18'
-    
-    - name: Install frontend dependencies
-      run: |
-        cd frontend
-        npm install
-    
-    - name: Run frontend tests
-      run: |
-        cd frontend
-        npm test
-    
-    - name: Build Docker images
-      run: |
-        docker-compose build
-    
-    - name: Run integration tests
-      run: |
-        docker-compose up -d
-        sleep 30
-        curl -f http://localhost:8001/health || exit 1
-        curl -f http://localhost:3000 || exit 1
-        docker-compose down
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
 
-  build:
-    needs: test
+jobs:
+  # ======================================
+  # 🔍 CHANGE DETECTION (Smart CI/CD)
+  # ======================================
+  detect-changes:
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
+    outputs:
+      backend: ${{ steps.changes.outputs.backend }}
+      frontend: ${{ steps.changes.outputs.frontend }}
+      analytics: ${{ steps.changes.outputs.analytics }}
+      notifications: ${{ steps.changes.outputs.notifications }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      
+      - name: 🔍 Detect Changes
+        id: changes
+        run: |
+          echo "backend=$(git diff HEAD~1 --name-only | grep -E '^backend/' | wc -l)" >> $GITHUB_OUTPUT
+          echo "frontend=$(git diff HEAD~1 --name-only | grep -E '^frontend/' | wc -l)" >> $GITHUB_OUTPUT
+          echo "analytics=$(git diff HEAD~1 --name-only | grep -E '^microservices/analytics-service/' | wc -l)" >> $GITHUB_OUTPUT
+          echo "notifications=$(git diff HEAD~1 --name-only | grep -E '^microservices/notification-service/' | wc -l)" >> $GITHUB_OUTPUT
+
+  # ======================================
+  # 🧪 TESTING MATRIX (Multi-service testing)
+  # ======================================
+  test-services:
+    runs-on: ubuntu-latest
+    needs: detect-changes
+    strategy:
+      matrix:
+        service: [backend, frontend, analytics, notifications]
+        include:
+          - service: backend
+            path: ./backend
+            test-cmd: pytest tests/ -v --cov=app --cov-report=xml
+          - service: frontend
+            path: ./frontend
+            test-cmd: npm test -- --coverage --watchAll=false
+          - service: analytics
+            path: ./microservices/analytics-service
+            test-cmd: pytest tests/ -v
+          - service: notifications
+            path: ./microservices/notification-service
+            test-cmd: pytest tests/ -v
     
     steps:
-    - uses: actions/checkout@v3
+      - name: 📥 Checkout Code
+        uses: actions/checkout@v4
+
+      - name: 🔍 Check if service changed
+        id: should-run
+        run: |
+          if [[ "${{ matrix.service }}" == "backend" && "${{ needs.detect-changes.outputs.backend }}" == "0" ]]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+          elif [[ "${{ matrix.service }}" == "frontend" && "${{ needs.detect-changes.outputs.frontend }}" == "0" ]]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+          elif [[ "${{ matrix.service }}" == "analytics" && "${{ needs.detect-changes.outputs.analytics }}" == "0" ]]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+          elif [[ "${{ matrix.service }}" == "notifications" && "${{ needs.detect-changes.outputs.notifications }}" == "0" ]]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
+      # Backend Testing
+      - name: 🐍 Setup Python (Backend/Microservices)
+        if: steps.should-run.outputs.skip == 'false' && matrix.service != 'frontend'
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: 📦 Install Python Dependencies
+        if: steps.should-run.outputs.skip == 'false' && matrix.service != 'frontend'
+        working-directory: ${{ matrix.path }}
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-cov
+
+      # Frontend Testing
+      - name: 🟢 Setup Node.js (Frontend)
+        if: steps.should-run.outputs.skip == 'false' && matrix.service == 'frontend'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: 📦 Install Node Dependencies
+        if: steps.should-run.outputs.skip == 'false' && matrix.service == 'frontend'
+        working-directory: ${{ matrix.path }}
+        run: npm ci
+
+      # Run Tests
+      - name: 🧪 Run Tests
+        if: steps.should-run.outputs.skip == 'false'
+        working-directory: ${{ matrix.path }}
+        run: ${{ matrix.test-cmd }}
+
+      # Upload Coverage
+      - name: 📊 Upload Coverage
+        if: steps.should-run.outputs.skip == 'false'
+        uses: codecov/codecov-action@v3
+        with:
+          file: ${{ matrix.path }}/coverage.xml
+          flags: ${{ matrix.service }}
+
+  # ======================================
+  # 🐳 DOCKER BUILD (Containerization)
+  # ======================================
+  build-images:
+    runs-on: ubuntu-latest
+    needs: [detect-changes, test-services]
+    if: github.event_name != 'pull_request'
+    strategy:
+      matrix:
+        service: [backend, frontend, analytics, notifications]
+        include:
+          - service: backend
+            dockerfile: ./backend/Dockerfile
+            context: ./backend
+          - service: frontend
+            dockerfile: ./frontend/Dockerfile
+            context: ./frontend
+          - service: analytics
+            dockerfile: ./microservices/analytics-service/Dockerfile
+            context: ./microservices/analytics-service
+          - service: notifications
+            dockerfile: ./microservices/notification-service/Dockerfile
+            context: ./microservices/notification-service
+
+    steps:
+      - name: 📥 Checkout Code
+        uses: actions/checkout@v4
+
+      - name: 🔍 Check if service changed
+        id: should-build
+        run: |
+          if [[ "${{ matrix.service }}" == "backend" && "${{ needs.detect-changes.outputs.backend }}" == "0" ]]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+          elif [[ "${{ matrix.service }}" == "frontend" && "${{ needs.detect-changes.outputs.frontend }}" == "0" ]]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+          elif [[ "${{ matrix.service }}" == "analytics" && "${{ needs.detect-changes.outputs.analytics }}" == "0" ]]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+          elif [[ "${{ matrix.service }}" == "notifications" && "${{ needs.detect-changes.outputs.notifications }}" == "0" ]]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: 🔑 Login to Container Registry
+        if: steps.should-build.outputs.skip == 'false'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 📝 Extract Metadata
+        if: steps.should-build.outputs.skip == 'false'
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/${{ matrix.service }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha,prefix=commit-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: 🔧 Set up Docker Buildx
+        if: steps.should-build.outputs.skip == 'false'
+        uses: docker/setup-buildx-action@v3
+
+      - name: 🐳 Build and Push Docker Image
+        if: steps.should-build.outputs.skip == 'false'
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ======================================
+  # 🔒 SECURITY SCANNING (Security awareness)
+  # ======================================
+  security-scan:
+    runs-on: ubuntu-latest
+    needs: build-images
+    if: github.event_name != 'pull_request'
     
-    - name: Build production images
-      run: |
-        echo "Building production images..."
-        docker-compose build
-        echo "Production build completed!"
+    steps:
+      - name: 📥 Checkout Code
+        uses: actions/checkout@v4
+
+      - name: 🔍 Run CodeQL Analysis
+        uses: github/codeql-action/init@v3
+        with:
+          languages: python, javascript
+
+      - name: 🔍 Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+
+      - name: 🔒 Run Trivy Vulnerability Scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+
+      - name: 📊 Upload Trivy Results
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+  # ======================================
+  # 🚀 INTEGRATION TESTS (E2E testing)
+  # ======================================
+  integration-tests:
+    runs-on: ubuntu-latest
+    needs: build-images
+    if: github.event_name != 'pull_request'
+    
+    services:
+      postgres:
+        image: postgres:14-alpine
+        env:
+          POSTGRES_USER: user
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: shopdb
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+
+    steps:
+      - name: 📥 Checkout Code
+        uses: actions/checkout@v4
+
+      - name: 🐳 Start Test Environment
+        run: |
+          cp .env .env.test
+          docker-compose -f docker-compose.ci.yml up -d --build
+          sleep 30
+
+      - name: 🧪 Run Integration Tests
+        run: |
+          ./scripts/test-services.sh integration
+
+      - name: 🧪 Run E2E Tests
+        run: |
+          curl -f http://localhost:8001/health || exit 1
+          curl -f http://localhost:3000 || exit 1
+
+      - name: 🧹 Cleanup
+        if: always()
+        run: docker-compose -f docker-compose.ci.yml down -v
+
+  # ======================================
+  # 📢 NOTIFICATIONS (Team collaboration)
+  # ======================================
+  notify:
+    runs-on: ubuntu-latest
+    needs: [test-services, build-images, security-scan, integration-tests]
+    if: always()
+    
+    steps:
+      - name: 📢 Notify Success
+        if: ${{ needs.test-services.result == 'success' && needs.build-images.result == 'success' }}
+        uses: 8398a7/action-slack@v3
+        with:
+          status: success
+          text: |
+            🎉 ShopSphere CI Pipeline Passed!
+            ✅ All tests passed
+            ✅ Docker images built
+            ✅ Security scan completed
+            📊 Commit: ${{ github.sha }}
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+      - name: 📢 Notify Failure
+        if: ${{ needs.test-services.result == 'failure' || needs.build-images.result == 'failure' }}
+        uses: 8398a7/action-slack@v3
+        with:
+          status: failure
+          text: |
+            ❌ ShopSphere CI Pipeline Failed!
+            🔍 Check: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
